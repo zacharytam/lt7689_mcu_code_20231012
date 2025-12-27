@@ -1,0 +1,114 @@
+name: Build LT7689
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install ARM GCC toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi
+
+      - name: Verify toolchain installation
+        run: |
+          arm-none-eabi-gcc --version
+
+      - name: Fix case-sensitivity and type issues
+        run: |
+          ln -s CST3XX.h Function/cst3xx.h
+          ln -s libEFlash.h MCU_drv/drv/inc/libEflash.h
+          touch MCU_drv/drv/inc/debug.h
+          sed -i 's/unsigned int ROP_Code/uint32_t ROP_Code/g' Function/LT768_Lib.h
+          sed -i 's/__NOP;/__NOP();/g' Function_drv/tp_drv.c
+          sed -i 's/#include "LT32U03.h"/\/\/#include "LT32U03.h"/g' MCU_drv/drv/src/usb_hid_control.c
+
+      - name: Download CMSIS GCC headers
+        run: |
+          curl -L https://raw.githubusercontent.com/ARM-software/CMSIS_5/develop/CMSIS/Core/Include/cmsis_gcc.h -o ccore/cmsis_gcc.h
+          curl -L https://raw.githubusercontent.com/ARM-software/CMSIS_5/develop/CMSIS/Core/Include/cmsis_compiler.h -o ccore/cmsis_compiler.h
+          curl -L https://raw.githubusercontent.com/ARM-software/CMSIS_5/develop/CMSIS/Core/Include/cmsis_version.h -o ccore/cmsis_version.h
+
+      - name: Create Makefile
+        run: |
+          cat > Makefile << 'EOF'
+          # Compiler settings
+          CC = arm-none-eabi-gcc
+          OBJCOPY = arm-none-eabi-objcopy
+          SIZE = arm-none-eabi-size
+
+          # Project name
+          PROJECT = LT7689
+
+          # CPU settings for Cortex-M4 with FPU
+          CPU = -mcpu=cortex-m4
+          FPU = -mfpu=fpv4-sp-d16
+          FLOAT-ABI = -mfloat-abi=hard
+          MCU = $(CPU) -mthumb $(FPU) $(FLOAT-ABI)
+
+          # C flags
+          CFLAGS = $(MCU)
+          CFLAGS += -Wall -Wno-error -fdata-sections -ffunction-sections
+          CFLAGS += -O0 -g
+          CFLAGS += -DARMCM4_FP
+
+          # Include paths
+          CFLAGS += -IUser
+          CFLAGS += -IFunction
+          CFLAGS += -IFunction_drv
+          CFLAGS += -IMCU_drv
+          CFLAGS += -IMCU_drv/drv/inc
+          CFLAGS += -ILevetoplib
+          CFLAGS += -IQRCODE
+          CFLAGS += -Iccore
+          CFLAGS += -Iccore/common
+
+          # Linker flags
+          LDFLAGS = $(MCU)
+          LDFLAGS += -Wl,--gc-sections
+          LDFLAGS += -Wl,-Map=$(PROJECT).map
+          LDFLAGS += --specs=nosys.specs
+          LDFLAGS += -lm
+
+          # Source files
+          C_SOURCES = $(wildcard User/*.c)
+          C_SOURCES += $(wildcard Function/*.c)
+          C_SOURCES += $(wildcard Function_drv/*.c)
+          C_SOURCES += $(wildcard MCU_drv/*.c)
+          C_SOURCES += $(wildcard MCU_drv/drv/src/*.c)
+          C_SOURCES += $(wildcard Levetoplib/*.c)
+          C_SOURCES += $(wildcard QRCODE/*.c)
+
+          # Object files
+          OBJECTS = $(C_SOURCES:.c=.o)
+
+          # Build target - compile only, no linking
+          all: $(OBJECTS)
+          	@echo "Compilation successful! Generated $(words $(OBJECTS)) object files."
+          	@echo "Note: Linking skipped due to missing library dependencies."
+
+          %.o: %.c
+          	$(CC) $(CFLAGS) -c $< -o $@
+
+          clean:
+          	rm -f $(OBJECTS) $(PROJECT).elf $(PROJECT).hex $(PROJECT).bin $(PROJECT).map
+
+          .PHONY: all clean
+          EOF
+
+      - name: Build project
+        run: make
+
+      - name: Upload compiled object files
+        uses: actions/upload-artifact@v4
+        with:
+          name: LT7689-object-files
+          path: |
+            **/*.o
+          retention-days: 30
